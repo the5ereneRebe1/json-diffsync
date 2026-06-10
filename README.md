@@ -374,6 +374,7 @@ The suite covers:
 - destructive delete rejection
 - large nested JSON documents
 - HTTP sync over a real local server
+- expected failure paths, including malformed patches, unknown sessions, version/hash mismatches, transport errors, and invalid HTTP methods
 
 Run browser E2E with React + Lexical:
 
