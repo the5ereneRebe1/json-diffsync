@@ -128,14 +128,14 @@ npm install json-diffsync
 Create tag:
 
 ```sh
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.0.1
+git push origin v0.0.1
 ```
 
 Create a GitHub release titled:
 
 ```txt
-json-diffsync v0.1.0
+json-diffsync v0.0.1
 ```
 
 Suggested release notes:

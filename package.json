@@ -1,6 +1,6 @@
 {
   "name": "json-diffsync",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "Differential synchronization primitives for JSON autosave, React clients, and Node servers.",
   "type": "module",
   "license": "MIT",
