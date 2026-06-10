@@ -1,0 +1,76 @@
+{
+  "name": "json-diffsync",
+  "version": "0.1.0",
+  "description": "Differential synchronization primitives for JSON autosave, React clients, and Node servers.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Himanshu Singh",
+  "homepage": "https://github.com/the5ereneRebe1/json-diffsync#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/the5ereneRebe1/json-diffsync.git"
+  },
+  "bugs": {
+    "url": "https://github.com/the5ereneRebe1/json-diffsync/issues"
+  },
+  "sideEffects": false,
+  "types": "./src/index.d.ts",
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "import": "./src/index.js"
+    },
+    "./react": {
+      "types": "./src/react.d.ts",
+      "import": "./src/react.js"
+    },
+    "./server": {
+      "types": "./src/server.d.ts",
+      "import": "./src/server.js"
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "bench": "node scripts/bench.js",
+    "test:e2e:browser": "playwright test test/browser-e2e.spec.js",
+    "prepublishOnly": "npm test"
+  },
+  "keywords": [
+    "json",
+    "diff",
+    "differential-sync",
+    "autosave",
+    "differential-synchronization",
+    "react",
+    "collaboration",
+    "sync"
+  ],
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@lexical/react": "^0.45.0",
+    "@playwright/test": "^1.60.0",
+    "@vitejs/plugin-react": "^6.0.2",
+    "lexical": "^0.45.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "vite": "^8.0.16"
+  }
+}

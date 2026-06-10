@@ -1,0 +1,40 @@
+name: Bug report
+description: Report incorrect sync, patch, or package behavior.
+title: "Bug: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Share the smallest JSON/input and sync steps that reproduce the issue.
+      render: js
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: json-diffsync version
+      placeholder: "0.1.0"
+
+  - type: input
+    id: runtime
+    attributes:
+      label: Runtime
+      placeholder: "Node 22, Chrome, React 19, etc."
