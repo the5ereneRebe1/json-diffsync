@@ -3,7 +3,7 @@ import {
   cloneJson,
   hashJson,
   isPlainObject,
-  stableStringify
+  jsonEqual
 } from "./json.js";
 
 const KEY_SEGMENT = "$key";
@@ -13,9 +13,7 @@ export function createJsonPatch(before, after, options = {}) {
   diffJson(before, after, [], ops, options);
   return {
     kind: "json-keyed",
-    baseHash: hashJson(before),
-    beforeBytes: stableStringify(before).length,
-    afterBytes: stableStringify(after).length,
+    baseHash: options.baseHash ?? hashJson(before),
     lossy: ops.some((op) => op.lossy === true),
     ops
   };
@@ -34,7 +32,7 @@ export function applyJsonPatch(value, patch, options = {}) {
 }
 
 function diffJson(before, after, path, ops, options) {
-  if (jsonEqual(before, after)) return;
+  if (before === after) return;
 
   if (isKeyedArray(before, options) && isKeyedArray(after, options)) {
     diffKeyedArray(before, after, path, ops, options);
@@ -45,7 +43,9 @@ function diffJson(before, after, path, ops, options) {
     const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
     for (const key of [...keys].sort()) {
       if (!(key in after)) {
-        ops.push({ op: "delete", path: [...path, key], oldValue: cloneJson(before[key]) });
+        const op = { op: "delete", path: [...path, key] };
+        if (options.includeOldValues) op.oldValue = cloneJson(before[key]);
+        ops.push(op);
       } else if (!(key in before)) {
         ops.push({ op: "set", path: [...path, key], value: cloneJson(after[key]) });
       } else {
@@ -55,14 +55,16 @@ function diffJson(before, after, path, ops, options) {
     return;
   }
 
-  ops.push({
-    op: "replace",
-    path,
-    oldValue: cloneJson(before),
-    value: cloneJson(after),
-    lossy: Array.isArray(before) || Array.isArray(after),
-    lossyReason: Array.isArray(before) || Array.isArray(after) ? "unkeyed_array_replace" : undefined
-  });
+  if (jsonEqual(before, after)) return;
+
+  const lossy = Array.isArray(before) || Array.isArray(after);
+  const op = { op: "replace", path, value: cloneJson(after) };
+  if (options.includeOldValues) op.oldValue = cloneJson(before);
+  if (lossy) {
+    op.lossy = true;
+    op.lossyReason = "unkeyed_array_replace";
+  }
+  ops.push(op);
 }
 
 function diffKeyedArray(before, after, path, ops, options) {
@@ -71,14 +73,15 @@ function diffKeyedArray(before, after, path, ops, options) {
 
   for (const [key, item] of beforeByKey) {
     if (!afterByKey.has(key)) {
-      ops.push({
+      const op = {
         op: "removeItem",
         path,
         key,
-        oldValue: cloneJson(item),
         beforeLength: before.length,
         afterLength: after.length
-      });
+      };
+      if (options.includeOldValues) op.oldValue = cloneJson(item);
+      ops.push(op);
     }
   }
 
@@ -151,13 +154,13 @@ function applyJsonOp(root, op, options) {
     case "reorderItems": {
       if (!Array.isArray(parent)) throw new Error("reorderItems target is not an array.");
       const byKey = mapByKey(parent, options);
+      const orderedKeys = new Set(op.keys);
       const ordered = [];
       for (const key of op.keys) {
         if (byKey.has(key)) ordered.push(byKey.get(key));
       }
       for (const item of parent) {
-        const key = getItemKey(item, options);
-        if (!op.keys.includes(key)) ordered.push(item);
+        if (!orderedKeys.has(getItemKey(item, options))) ordered.push(item);
       }
       parent.splice(0, parent.length, ...ordered);
       return root;
@@ -231,10 +234,6 @@ function findIndexByKey(array, key, options) {
 
 function isKeySegment(segment) {
   return isPlainObject(segment) && typeof segment[KEY_SEGMENT] === "string";
-}
-
-function jsonEqual(left, right) {
-  return stableStringify(left) === stableStringify(right);
 }
 
 function arrayEqual(left, right) {

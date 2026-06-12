@@ -1,10 +1,24 @@
 # json-diffsync
 
+[![npm version](https://img.shields.io/npm/v/json-diffsync)](https://www.npmjs.com/package/json-diffsync)
+[![runtime dependencies](https://img.shields.io/badge/runtime_deps-0-brightgreen)](https://www.npmjs.com/package/json-diffsync?activeTab=dependencies)
+[![node](https://img.shields.io/node/v/json-diffsync)](https://nodejs.org)
+[![types](https://img.shields.io/badge/types-included-blue)](./src/index.d.ts)
+[![license](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
+
 Differential synchronization primitives for JSON autosave.
 
 `json-diffsync` helps keep multiple open copies of the same JSON document in sync without letting one stale tab or device overwrite newer work from another. It is designed for autosave flows in editors, form builders, dashboard builders, app-state editors, and JSON-based rich-text frameworks.
 
 It is intentionally not a CRDT and not Operational Transformation. It follows the classic differential synchronization model: every client keeps a local value and a shadow, the server keeps a canonical value and one shadow per client session, and sync requests exchange patches computed between the shadow and current JSON.
+
+## The Problem
+
+Full-document autosave has a failure mode everyone has met: the browser tab you opened this morning quietly saves over the work you did this afternoon.
+
+![Without diff sync, a stale laptop PUTs its full document and silently erases the 47 blocks written on the iPad. With json-diffsync, the stale laptop syncs an empty patch and the server replies with the 47 blocks it missed.](assets/stale-tab-problem.svg)
+
+A client never uploads its document. It uploads the difference between its document and the last state both sides agreed on — for a stale client, that difference is empty.
 
 ## Core Idea
 
@@ -25,15 +39,19 @@ Objects are diffed by property path. Arrays of objects are treated as keyed when
 - Use the built-in `createFetchTransport` for HTTP sync.
 - Persist local client state with `createLocalStoragePersister`.
 - Recover from server shadow mismatch without blindly discarding unsynced local edits.
+- Recover from client version mismatch after a server restart loses session state.
+- Check for unsynced edits with `hasLocalChanges()` and `state.dirty`.
 - Configure identity fields with `keyFields`.
 - Use `sync({ confirmDestructive: true })` for explicit destructive saves.
 
 ## React Client Features
 
 - Use `useDifferentialAutosave` for React apps.
-- Autosync on an interval with `intervalMs`.
+- Autosave dirty changes on an interval with `intervalMs`; clean ticks are skipped.
+- Poll for remote changes with `pullIntervalMs` (default 10s), plus a pull when the tab becomes visible.
+- Flush unsynced edits when the tab is hidden or unloaded.
 - Persist hook state under a configurable `storageKey`.
-- Expose `value`, `setValue`, `sync`, `status`, and `error`.
+- Expose `value`, `setValue`, `sync`, `status`, `error`, and `dirty`.
 - Works with any JSON-producing editor or UI state, including Lexical-style JSON.
 
 ## Server Features
@@ -45,8 +63,9 @@ Objects are diffed by property path. Arrays of objects are treated as keyed when
 - Apply client patches and return missing server patches.
 - Configure keyed array identity with `keyFields`.
 - Configure destructive patch sensitivity with `destructiveDeleteRatio`.
-- Keep or disable revision history with `keepRevisions`.
-- Expose a Node HTTP handler with `createNodeSyncHandler`.
+- Keep or disable revision history with `keepRevisions`; cap it with `maxRevisions` (default 100).
+- Create sessions lazily on first sync, so remote HTTP clients need no separate open call.
+- Expose a Node HTTP handler with `createNodeSyncHandler(server, { maxBodyBytes })` that rejects malformed JSON (400), unknown documents (404), and oversized bodies (413, 16 MB default) without crashing.
 
 The in-memory server is a reference implementation. Production apps will usually wrap the same sync logic with durable storage.
 
@@ -54,7 +73,8 @@ The in-memory server is a reference implementation. Production apps will usually
 
 - Diff arbitrary JSON with `createJsonPatch`.
 - Apply patches with `applyJsonPatch`.
-- Hash JSON deterministically with `hashJson`.
+- Hash JSON deterministically with `hashJson`; compare structurally with `jsonEqual`.
+- Patches carry only new values by default; pass `includeOldValues: true` to embed `oldValue` for strict standalone verification.
 - Diff keyed arrays as item-level operations: `insertItem`, `removeItem`, `reorderItems`.
 - Diff objects as path-level operations: `set`, `replace`, `delete`.
 - Mark unkeyed array replacements with `patch.lossy === true`.
@@ -154,6 +174,10 @@ export function JsonEditor({ documentId, sessionId }) {
 For Lexical or other editor frameworks, call `autosave.setValue(...)` with the serialized JSON state when the editor updates, then apply `autosave.value` back to the editor when remote patches arrive.
 
 ## Fidelity Model
+
+How much of your structure survives a diff depends on whether array items can be identified:
+
+![Keyed arrays, where items carry an id or key, get item-level set and insertItem operations that merge with concurrent edits. Unkeyed arrays of plain values are replaced atomically on any change and marked lossy, so concurrent edits overwrite each other.](assets/keyed-vs-unkeyed.svg)
 
 ### Objects
 
@@ -258,35 +282,30 @@ Server responds with what the client is missing:
 
 ## Autosave Flow
 
-Each client maintains:
+Both sides keep two copies of the document. The extra copy — the shadow — is what makes diffing against a moving target safe:
 
-```txt
-client.value       current JSON state
-client.shadow      server state this client last synced against
-clientVersion      monotonic version for this client shadow
-serverVersion      last server version this client received
-```
+![Every client keeps a value (what the user sees) and a shadow (the last agreed-upon state). The server keeps the canonical value plus one shadow per client session.](assets/value-shadow-model.svg)
 
-The server maintains:
+One sync round trip:
 
-```txt
-document.value                  canonical JSON
-document.sessions[laptop].value server-side shadow for laptop
-document.sessions[ipad].value   server-side shadow for iPad
-```
+![The client diffs its shadow against its value and sends the patch with a shadow hash and versions. The server validates the hash, applies the patch to the session shadow and the canonical value, then replies with the diff the client is missing. The client applies the reply and now matches the server.](assets/sync-roundtrip.svg)
 
 When a stale laptop autosaves, it does not say “replace the server with my full JSON.” It sends only the diff between `client.shadow` and `client.value`. If the laptop made no local edits, that patch is empty. The server then diffs the laptop shadow against canonical state and sends back changes made elsewhere.
 
 ## Guardrails
 
-Differential sync prevents stale full-document overwrites, but it cannot know whether a valid delete-most diff came from a real user action or a broken client. The reference server includes:
+Differential sync prevents stale full-document overwrites, but it cannot know whether a valid delete-most diff came from a real user action or a broken client. A user clearing their document and a buggy editor emitting `[]` produce the same patch, so the big deletes get a speed bump:
+
+![A patch that deletes 80 percent or more of the document is applied with a revision recorded only when meta.confirmDestructive is true; otherwise it is rejected with a 409 destructive_patch_requires_confirmation.](assets/destructive-guardrail.svg)
+
+The reference server includes:
 
 - Shadow hash validation.
 - Client version validation.
 - Destructive patch confirmation.
 - Revision history.
 
-By default, a patch that shrinks the JSON payload by at least 80%, or removes at least 80% of a keyed child array, is rejected unless `sync({ confirmDestructive: true })` is used.
+By default, a patch that shrinks the JSON payload by at least 80%, or removes at least 80% of a keyed child array, is rejected unless `sync({ confirmDestructive: true })` is used. Shrinkage is measured server-side against the server's own session shadow, so a broken client cannot understate a deletion.
 
 ## API
 
@@ -300,7 +319,8 @@ import {
   applyJsonPatch,
   cloneJson,
   stableStringify,
-  hashJson
+  hashJson,
+  jsonEqual
 } from "json-diffsync";
 ```
 
@@ -311,9 +331,10 @@ Client helpers:
 
 Patch helpers:
 
-- `createJsonPatch(before, after, options?)`
+- `createJsonPatch(before, after, options?)` with `keyFields`, `includeOldValues`, `baseHash`
 - `applyJsonPatch(value, patch, options?)`
 - `hashJson(value)`
+- `jsonEqual(left, right)`
 - `stableStringify(value)`
 - `cloneJson(value)`
 
@@ -339,8 +360,8 @@ import {
 
 Server helpers:
 
-- `createMemoryAutosaveServer(options?)`
-- `createNodeSyncHandler(server)`
+- `createMemoryAutosaveServer(options?)` with `keyFields`, `destructiveDeleteRatio`, `keepRevisions`, `maxRevisions`
+- `createNodeSyncHandler(server, options?)` with `maxBodyBytes`
 - `createFetchTransport(url, fetchImpl?)`
 
 ## Source Layout
@@ -374,7 +395,6 @@ The suite covers:
 - destructive delete rejection
 - large nested JSON documents
 - HTTP sync over a real local server
-- expected failure paths, including malformed patches, unknown sessions, version/hash mismatches, transport errors, and invalid HTTP methods
 
 Run browser E2E with React + Lexical:
 
@@ -394,7 +414,7 @@ npm run bench
 
 The benchmark generates deterministic nested JSON documents, mutates deep keyed nodes, inserts keyed blocks, reorders sections, and measures patch creation, patch application, and full in-memory client/server sync.
 
-Current MVP behavior: patch size scales well, but full sync time still grows with total JSON size because the implementation hashes, stringifies, and clones whole values in a few places. Optimization targets are documented by the benchmark.
+Current behavior: patch size scales with the edit, not the document. Diffing is structural (no per-level stringification) and shadow hashes are cached on both sides, so an idle sync costs almost nothing. The remaining cost on very large documents is the full-document clone inside `setValue` and `applyJsonPatch`; copy-on-write path updates are the next optimization target.
 
 ## Status
 

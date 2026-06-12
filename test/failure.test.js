@@ -84,7 +84,23 @@ test("failure: opening an unknown document throws", () => {
   );
 });
 
-test("failure: syncing an unknown session returns a structured error", () => {
+test("failure: syncing an unknown document returns a structured error", () => {
+  const server = createMemoryAutosaveServer();
+
+  const response = server.sync({
+    documentId: "missing",
+    sessionId: "laptop",
+    clientVersion: 0,
+    serverVersion: 0,
+    shadowHash: "x",
+    patch: { kind: "json-keyed", baseHash: "x", lossy: false, ops: [] },
+    meta: {}
+  });
+
+  assert.deepEqual(response, { ok: false, reason: "unknown_document" });
+});
+
+test("failure: syncing an unopened session lazily creates the session shadow", () => {
   const server = createMemoryAutosaveServer();
   const created = server.createDocument({ documentId: "doc-unknown-session", value: doc() });
   const patch = createJsonPatch(created.value, created.value);
@@ -99,7 +115,13 @@ test("failure: syncing an unknown session returns a structured error", () => {
     meta: {}
   });
 
-  assert.deepEqual(response, { ok: false, reason: "unknown_session" });
+  assert.equal(response.ok, true);
+  assert.equal(
+    server.inspectDocument(created.documentId).sessions.some(
+      (session) => session.sessionId === "not-opened"
+    ),
+    true
+  );
 });
 
 test("failure: malformed patches return patch_apply_failed without changing server state", () => {

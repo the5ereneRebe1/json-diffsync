@@ -1,16 +1,26 @@
 import { applyJsonPatch, createJsonPatch } from "../core/patch.js";
-import { cloneJson, hashJson, stableStringify } from "../core/json.js";
+import { cloneJson, hashJson, jsonEqual, stableStringify } from "../core/json.js";
 
 export function createMemoryAutosaveServer(options = {}) {
   const documents = new Map();
   const destructiveDeleteRatio = options.destructiveDeleteRatio ?? 0.8;
   const keepRevisions = options.keepRevisions ?? true;
+  const maxRevisions = options.maxRevisions ?? 100;
   const keyFields = options.keyFields ?? ["key", "id"];
 
   function getDocument(documentId) {
     const document = documents.get(documentId);
     if (!document) throw new Error(`Unknown document: ${documentId}`);
     return document;
+  }
+
+  function createSessionShadow(document) {
+    return {
+      value: cloneJson(document.value),
+      hash: null,
+      clientVersion: 0,
+      serverVersion: document.version
+    };
   }
 
   return {
@@ -27,11 +37,7 @@ export function createMemoryAutosaveServer(options = {}) {
     },
     openDocument({ documentId, sessionId }) {
       const document = getDocument(documentId);
-      document.sessions.set(sessionId, {
-        value: cloneJson(document.value),
-        clientVersion: 0,
-        serverVersion: document.version
-      });
+      document.sessions.set(sessionId, createSessionShadow(document));
       return {
         ok: true,
         documentId,
@@ -57,10 +63,14 @@ export function createMemoryAutosaveServer(options = {}) {
       };
     },
     sync(message) {
-      const document = getDocument(message.documentId);
-      const shadow = document.sessions.get(message.sessionId);
+      const document = documents.get(message.documentId);
+      if (!document) {
+        return { ok: false, reason: "unknown_document" };
+      }
+      let shadow = document.sessions.get(message.sessionId);
       if (!shadow) {
-        return { ok: false, reason: "unknown_session" };
+        shadow = createSessionShadow(document);
+        document.sessions.set(message.sessionId, shadow);
       }
 
       if (message.clientVersion !== shadow.clientVersion) {
@@ -72,7 +82,8 @@ export function createMemoryAutosaveServer(options = {}) {
         };
       }
 
-      if (message.shadowHash !== hashJson(shadow.value) || message.patch.baseHash !== hashJson(shadow.value)) {
+      shadow.hash ??= hashJson(shadow.value);
+      if (message.shadowHash !== shadow.hash || message.patch.baseHash !== shadow.hash) {
         return {
           ok: false,
           reason: "shadow_mismatch",
@@ -82,7 +93,29 @@ export function createMemoryAutosaveServer(options = {}) {
         };
       }
 
-      if (isDestructivePatch(message.patch, destructiveDeleteRatio) && !message.meta?.confirmDestructive) {
+      const clientChanged = message.patch.ops.length > 0;
+      let nextShadow = shadow.value;
+      let nextValue = document.value;
+      if (clientChanged) {
+        try {
+          nextShadow = applyJsonPatch(shadow.value, message.patch, { strict: true, keyFields });
+          nextValue = applyJsonPatch(document.value, message.patch, { keyFields });
+        } catch (error) {
+          return {
+            ok: false,
+            reason: "patch_apply_failed",
+            detail: error.message,
+            clientVersion: shadow.clientVersion,
+            serverVersion: shadow.serverVersion
+          };
+        }
+      }
+
+      if (
+        clientChanged &&
+        !message.meta?.confirmDestructive &&
+        isDestructivePatch(message.patch, destructiveDeleteRatio, shadow.value, nextShadow)
+      ) {
         return {
           ok: false,
           reason: "destructive_patch_requires_confirmation",
@@ -91,22 +124,7 @@ export function createMemoryAutosaveServer(options = {}) {
         };
       }
 
-      let nextShadow;
-      let nextValue;
-      try {
-        nextShadow = applyJsonPatch(shadow.value, message.patch, { strict: true, keyFields });
-        nextValue = applyJsonPatch(document.value, message.patch, { keyFields });
-      } catch (error) {
-        return {
-          ok: false,
-          reason: "patch_apply_failed",
-          detail: error.message,
-          clientVersion: shadow.clientVersion,
-          serverVersion: shadow.serverVersion
-        };
-      }
-
-      const changedServer = stableStringify(nextValue) !== stableStringify(document.value);
+      const changedServer = clientChanged && !jsonEqual(nextValue, document.value);
       if (keepRevisions && changedServer) {
         document.revisions.push({
           version: document.version,
@@ -116,15 +134,28 @@ export function createMemoryAutosaveServer(options = {}) {
           patch: cloneJson(message.patch),
           at: new Date().toISOString()
         });
+        if (document.revisions.length > maxRevisions) {
+          document.revisions.splice(0, document.revisions.length - maxRevisions);
+        }
       }
 
       document.value = nextValue;
       if (changedServer) document.version += 1;
       shadow.value = nextShadow;
-      shadow.clientVersion += 1;
+      if (clientChanged) {
+        shadow.hash = null;
+        shadow.clientVersion += 1;
+      }
 
-      const serverPatch = createJsonPatch(shadow.value, document.value, { keyFields });
-      shadow.value = applyJsonPatch(shadow.value, serverPatch, { strict: true, keyFields });
+      shadow.hash ??= hashJson(shadow.value);
+      const serverPatch = createJsonPatch(shadow.value, document.value, {
+        keyFields,
+        baseHash: shadow.hash
+      });
+      if (serverPatch.ops.length > 0) {
+        shadow.value = cloneJson(document.value);
+        shadow.hash = null;
+      }
       shadow.serverVersion = document.version;
 
       return {
@@ -138,9 +169,17 @@ export function createMemoryAutosaveServer(options = {}) {
   };
 }
 
-function isDestructivePatch(patch, ratio) {
-  if (patch.beforeBytes === 0) return false;
-  const removedMostBytes = patch.afterBytes / patch.beforeBytes <= 1 - ratio;
+// Shrinkage is measured against the server's own shadow rather than any
+// client-reported sizes, so a broken client cannot understate a deletion.
+function isDestructivePatch(patch, ratio, beforeValue, afterValue) {
+  const hasShrinkingOps = patch.ops.some((op) => (
+    op.op === "delete" || op.op === "removeItem" || op.op === "replace"
+  ));
+  if (!hasShrinkingOps) return false;
+
+  const beforeBytes = stableStringify(beforeValue).length;
+  if (beforeBytes === 0) return false;
+  const removedMostBytes = stableStringify(afterValue).length / beforeBytes <= 1 - ratio;
   const removedMostKeyedItems = patch.ops.some((op) => (
     op.op === "removeItem" &&
     op.beforeLength > 0 &&
@@ -154,12 +193,7 @@ function isDestructivePatch(patch, ratio) {
     op.keys.length === 0
   ));
 
-  if (!removedMostBytes && !removedMostKeyedItems && !reorderedToEmpty) return false;
-  return patch.ops.some((op) => (
-    op.op === "delete" ||
-    op.op === "removeItem" ||
-    (op.op === "replace" && stableStringify(op.value).length < stableStringify(op.oldValue).length)
-  ));
+  return removedMostBytes || removedMostKeyedItems || reorderedToEmpty;
 }
 
 function cryptoRandomId() {

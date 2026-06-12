@@ -1,0 +1,41 @@
+<svg viewBox="0 0 820 250" width="820" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title">
+  <title id="title">Every client keeps a value and a shadow; the server keeps the canonical value and one shadow per client session.</title>
+  <style>
+    :root { --text:#1f2328; --muted:#59636e; --line:#818b98; --box:#f6f8fa; --stroke:#d1d9e0; --blue:#0969da; --green:#1a7f37; --red:#cf222e; --amber:#9a6700; }
+    @media (prefers-color-scheme: dark) {
+      :root { --text:#e6edf3; --muted:#9198a1; --line:#767e89; --box:#151b23; --stroke:#3d444d; --blue:#4493f8; --green:#3fb950; --red:#f85149; --amber:#d29922; }
+    }
+    text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 13px; fill: var(--text); }
+    .h { font-weight: 700; font-size: 14px; }
+    .b { font-weight: 700; }
+    .muted { fill: var(--muted); }
+    .blue { fill: var(--blue); }
+    .small { font-size: 12px; }
+    .box { fill: var(--box); stroke: var(--stroke); stroke-width: 1.5; rx: 8; }
+    .wire-blue { stroke: var(--blue); stroke-width: 1.5; fill: none; }
+  </style>
+  <defs>
+    <marker id="aB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--blue)"/>
+    </marker>
+  </defs>
+
+  <text x="30" y="30" class="h">every client</text>
+  <rect x="20" y="44" width="310" height="160" class="box"/>
+  <text x="40" y="80" class="b">value</text>
+  <text x="58" y="102" class="muted">what the user sees</text>
+  <text x="40" y="146" class="b">shadow</text>
+  <text x="58" y="168" class="muted">last agreed-upon state</text>
+
+  <text x="500" y="30" class="h">the server</text>
+  <rect x="490" y="44" width="310" height="160" class="box"/>
+  <text x="510" y="80" class="b">value</text>
+  <text x="510" y="102" class="muted">the canonical truth</text>
+  <text x="510" y="146" class="b">shadows · one per session</text>
+  <text x="510" y="168" class="muted">"laptop", "ipad", "tab-42"…</text>
+
+  <line x1="345" y1="124" x2="475" y2="124" class="wire-blue" marker-start="url(#aB)" marker-end="url(#aB)"/>
+  <text x="380" y="113" class="blue b">sync</text>
+
+  <text x="20" y="238" class="muted small">a patch is never "here is my document" — it is "here is what changed since we last agreed"</text>
+</svg>

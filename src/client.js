@@ -1,4 +1,4 @@
-import { DEFAULT_KEY_FIELDS, cloneJson, hashJson } from "./core/json.js";
+import { DEFAULT_KEY_FIELDS, cloneJson, hashJson, jsonEqual } from "./core/json.js";
 import { applyJsonPatch, createJsonPatch } from "./core/patch.js";
 
 export function createAutosaveClient(options) {
@@ -13,7 +13,13 @@ export function createAutosaveClient(options) {
     keyFields = DEFAULT_KEY_FIELDS
   } = options;
 
-  const saved = persister?.load();
+  let saved = null;
+  try {
+    saved = persister?.load() ?? null;
+  } catch {
+    saved = null;
+  }
+
   const state = {
     documentId,
     sessionId,
@@ -21,9 +27,24 @@ export function createAutosaveClient(options) {
     shadow: saved?.shadow ?? cloneJson(initialValue),
     clientVersion: saved?.clientVersion ?? clientVersion,
     serverVersion: saved?.serverVersion ?? serverVersion,
+    dirty: false,
     syncing: false,
     lastError: null
   };
+  state.dirty = !jsonEqual(state.value, state.shadow);
+
+  let shadowHash = null;
+  let edits = 0;
+
+  function currentShadowHash() {
+    shadowHash ??= hashJson(state.shadow);
+    return shadowHash;
+  }
+
+  function setShadow(nextShadow) {
+    state.shadow = nextShadow;
+    shadowHash = null;
+  }
 
   function persist() {
     persister?.save({
@@ -34,7 +55,7 @@ export function createAutosaveClient(options) {
     });
   }
 
-  persist();
+  if (!saved) persist();
 
   return {
     get state() {
@@ -49,30 +70,44 @@ export function createAutosaveClient(options) {
     },
     setValue(nextValue) {
       state.value = cloneJson(nextValue);
+      state.dirty = true;
+      edits += 1;
       persist();
+    },
+    hasLocalChanges() {
+      return state.dirty;
     },
     async sync(meta = {}) {
       if (state.syncing) return { skipped: true };
       state.syncing = true;
       state.lastError = null;
 
-      const patch = createJsonPatch(state.shadow, state.value, { keyFields });
+      const editsAtStart = edits;
+      const previousClientVersion = state.clientVersion;
+      const previousServerVersion = state.serverVersion;
+      const baseHash = currentShadowHash();
+      const patch = createJsonPatch(state.shadow, state.value, { keyFields, baseHash });
       try {
         const response = await transport.sync({
           documentId,
           sessionId,
           clientVersion: state.clientVersion,
           serverVersion: state.serverVersion,
-          shadowHash: hashJson(state.shadow),
+          shadowHash: baseHash,
           patch,
           meta
         });
 
         if (!response.ok) {
           if (response.reason === "shadow_mismatch" && response.value !== undefined) {
-            const hasLocalChanges = hashJson(state.value) !== hashJson(state.shadow);
+            const hasLocalChanges = !jsonEqual(state.value, state.shadow);
             if (!hasLocalChanges) state.value = cloneJson(response.value);
-            state.shadow = cloneJson(response.value);
+            setShadow(cloneJson(response.value));
+            state.dirty = hasLocalChanges && !jsonEqual(state.value, state.shadow);
+            state.clientVersion = response.clientVersion ?? state.clientVersion;
+            state.serverVersion = response.serverVersion ?? state.serverVersion;
+            persist();
+          } else if (response.reason === "client_version_mismatch") {
             state.clientVersion = response.clientVersion ?? state.clientVersion;
             state.serverVersion = response.serverVersion ?? state.serverVersion;
             persist();
@@ -80,16 +115,28 @@ export function createAutosaveClient(options) {
           throw new Error(response.reason ?? "Sync failed.");
         }
 
-        state.shadow = applyJsonPatch(state.shadow, patch, { strict: true, keyFields });
+        if (patch.ops.length > 0) {
+          setShadow(applyJsonPatch(state.shadow, patch, { strict: true, keyFields }));
+        }
         state.clientVersion = response.clientVersion;
 
-        if (response.patch) {
+        const receivedOps = response.patch?.ops?.length > 0;
+        if (receivedOps) {
           state.value = applyJsonPatch(state.value, response.patch, { keyFields });
-          state.shadow = applyJsonPatch(state.shadow, response.patch, { strict: true, keyFields });
+          setShadow(applyJsonPatch(state.shadow, response.patch, { strict: true, keyFields }));
         }
 
         state.serverVersion = response.serverVersion;
-        persist();
+        if (edits === editsAtStart) state.dirty = false;
+
+        if (
+          patch.ops.length > 0 ||
+          receivedOps ||
+          state.clientVersion !== previousClientVersion ||
+          state.serverVersion !== previousServerVersion
+        ) {
+          persist();
+        }
         return { ok: true, changed: patch.ops.length > 0 };
       } catch (error) {
         state.lastError = error;

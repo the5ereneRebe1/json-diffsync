@@ -1,9 +1,12 @@
+import type { AutosaveClient } from "./index.js";
+
 export function useDifferentialAutosave(options: {
   documentId: string;
   sessionId: string;
   initialValue?: unknown;
   transport: { sync(message: unknown): Promise<any> };
   intervalMs?: number;
+  pullIntervalMs?: number;
   keyFields?: string[];
   storageKey?: string;
 }): {
@@ -12,5 +15,6 @@ export function useDifferentialAutosave(options: {
   sync(meta?: Record<string, unknown>): Promise<any>;
   status: "idle" | "syncing" | "error";
   error: unknown;
-  client: any;
+  dirty: boolean;
+  client: AutosaveClient;
 };
