@@ -1,0 +1,50 @@
+<svg viewBox="0 0 820 430" width="820" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title">
+  <title id="title">One sync round trip: the client sends a patch of its local changes with a shadow hash; the server validates, applies, and replies with the changes the client is missing.</title>
+  <style>
+    :root { --text:#1f2328; --muted:#59636e; --line:#818b98; --box:#f6f8fa; --stroke:#d1d9e0; --blue:#0969da; --green:#1a7f37; --red:#cf222e; --amber:#9a6700; }
+    @media (prefers-color-scheme: dark) {
+      :root { --text:#e6edf3; --muted:#9198a1; --line:#767e89; --box:#151b23; --stroke:#3d444d; --blue:#4493f8; --green:#3fb950; --red:#f85149; --amber:#d29922; }
+    }
+    text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 13px; fill: var(--text); }
+    .h { font-weight: 700; font-size: 14px; }
+    .muted { fill: var(--muted); }
+    .blue { fill: var(--blue); }
+    .green { fill: var(--green); }
+    .small { font-size: 12px; }
+    .life { stroke: var(--stroke); stroke-width: 1.5; stroke-dasharray: 4 4; }
+    .wire-blue { stroke: var(--blue); stroke-width: 1.5; fill: none; }
+    .wire-green { stroke: var(--green); stroke-width: 1.5; fill: none; }
+  </style>
+  <defs>
+    <marker id="aB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--blue)"/>
+    </marker>
+    <marker id="aG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--green)"/>
+    </marker>
+  </defs>
+
+  <text x="105" y="26" class="h">laptop</text>
+  <text x="496" y="26" class="h">server</text>
+  <line x1="130" y1="38" x2="130" y2="396" class="life"/>
+  <line x1="520" y1="38" x2="520" y2="396" class="life"/>
+
+  <text x="148" y="68">1. patch = diff(shadow, value)</text>
+  <text x="166" y="88" class="muted small">"what changed since we agreed"</text>
+
+  <line x1="130" y1="116" x2="514" y2="116" class="wire-blue" marker-end="url(#aB)"/>
+  <text x="180" y="107" class="blue small">patch + shadowHash + versions</text>
+
+  <text x="538" y="150">2. shadowHash still matches?</text>
+  <text x="538" y="178">3. apply patch to session shadow</text>
+  <text x="556" y="198" class="muted small">and to the canonical value</text>
+  <text x="538" y="226">4. reply = diff(shadow, canonical)</text>
+  <text x="556" y="246" class="muted small">"what you missed meanwhile"</text>
+
+  <line x1="520" y1="278" x2="136" y2="278" class="wire-green" marker-end="url(#aG)"/>
+  <text x="200" y="297" class="green small">ok + reply patch + versions</text>
+
+  <text x="148" y="334">5. apply reply patch</text>
+
+  <text x="148" y="382" class="green">✓ value now matches the server</text>
+</svg>

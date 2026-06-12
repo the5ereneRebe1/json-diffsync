@@ -1,0 +1,59 @@
+<svg viewBox="0 0 820 310" width="820" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title">
+  <title id="title">Keyed arrays get item-level operations that merge with concurrent edits; unkeyed arrays are replaced atomically and marked lossy.</title>
+  <style>
+    :root { --text:#1f2328; --muted:#59636e; --line:#818b98; --box:#f6f8fa; --stroke:#d1d9e0; --blue:#0969da; --green:#1a7f37; --red:#cf222e; --amber:#9a6700; }
+    @media (prefers-color-scheme: dark) {
+      :root { --text:#e6edf3; --muted:#9198a1; --line:#767e89; --box:#151b23; --stroke:#3d444d; --blue:#4493f8; --green:#3fb950; --red:#f85149; --amber:#d29922; }
+    }
+    text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 13px; fill: var(--text); }
+    .h { font-weight: 700; font-size: 14px; }
+    .b { font-weight: 700; }
+    .muted { fill: var(--muted); }
+    .green { fill: var(--green); }
+    .amber { fill: var(--amber); }
+    .blue { fill: var(--blue); }
+    .small { font-size: 12px; }
+    .box { fill: var(--box); stroke: var(--stroke); stroke-width: 1.5; rx: 8; }
+    .wire { stroke: var(--line); stroke-width: 1.5; fill: none; }
+  </style>
+  <defs>
+    <marker id="aL" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--line)"/>
+    </marker>
+  </defs>
+
+  <!-- keyed column -->
+  <text x="20" y="30" class="h">keyed</text>
+  <text x="75" y="30" class="muted">— items carry an id / key</text>
+  <text x="20" y="62">[ {id:"a"}, {id:"b"}, {id:"c"} ]</text>
+
+  <line x1="130" y1="78" x2="130" y2="120" class="wire" marker-end="url(#aL)"/>
+  <text x="146" y="104" class="muted small">edit b, insert d</text>
+
+  <rect x="20" y="134" width="360" height="76" class="box"/>
+  <text x="38" y="164" class="blue b">set</text>
+  <text x="138" y="164">blocks[$key="b"].text</text>
+  <text x="38" y="190" class="blue b">insertItem</text>
+  <text x="138" y="190">d at index 3</text>
+
+  <text x="20" y="246" class="green">✓ item-level ops, merges with</text>
+  <text x="38" y="266" class="green">concurrent edits</text>
+
+  <!-- unkeyed column -->
+  <text x="440" y="30" class="h">unkeyed</text>
+  <text x="512" y="30" class="muted">— plain values</text>
+  <text x="440" y="62">[ "draft", "review" ]</text>
+
+  <line x1="520" y1="78" x2="520" y2="120" class="wire" marker-end="url(#aL)"/>
+  <text x="536" y="104" class="muted small">any change at all</text>
+
+  <rect x="440" y="134" width="360" height="76" class="box"/>
+  <text x="458" y="164" class="amber b">replace</text>
+  <text x="558" y="164">the whole array</text>
+  <text x="458" y="190" class="muted">atomic · patch.lossy = true</text>
+
+  <text x="440" y="246" class="amber">⚠ last write wins, concurrent</text>
+  <text x="458" y="266" class="amber">edits overwrite each other</text>
+
+  <text x="20" y="300" class="muted small">if a collection matters, give each item a stable key — any field via keyFields: ["uuid", "nodeId"]</text>
+</svg>

@@ -15,20 +15,58 @@ export function createFetchTransport(url, fetchImpl = globalThis.fetch) {
   };
 }
 
-export function createNodeSyncHandler(server) {
+export function createNodeSyncHandler(server, options = {}) {
+  const maxBodyBytes = options.maxBodyBytes ?? 16 * 1024 * 1024;
+
   return async function handleSync(request, response) {
-    if (request.method !== "POST") {
-      response.writeHead(405, { "content-type": "application/json" });
-      response.end(JSON.stringify({ ok: false, reason: "method_not_allowed" }));
-      return;
+    function respond(status, body) {
+      response.writeHead(status, { "content-type": "application/json" });
+      response.end(JSON.stringify(body));
     }
 
-    const chunks = [];
-    for await (const chunk of request) chunks.push(chunk);
-    const message = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    const result = server.sync(message);
+    if (request.method !== "POST") {
+      return respond(405, { ok: false, reason: "method_not_allowed" });
+    }
 
-    response.writeHead(result.ok ? 200 : 409, { "content-type": "application/json" });
-    response.end(JSON.stringify(result));
+    try {
+      const chunks = [];
+      let received = 0;
+      for await (const chunk of request) {
+        received += chunk.length;
+        if (received > maxBodyBytes) {
+          respond(413, { ok: false, reason: "payload_too_large" });
+          request.destroy();
+          return;
+        }
+        chunks.push(chunk);
+      }
+
+      let message;
+      try {
+        message = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      } catch {
+        return respond(400, { ok: false, reason: "invalid_json" });
+      }
+      if (
+        !message ||
+        typeof message !== "object" ||
+        typeof message.documentId !== "string" ||
+        typeof message.sessionId !== "string" ||
+        !message.patch ||
+        !Array.isArray(message.patch.ops)
+      ) {
+        return respond(400, { ok: false, reason: "invalid_message" });
+      }
+
+      const result = server.sync(message);
+      const status = result.ok ? 200 : result.reason === "unknown_document" ? 404 : 409;
+      respond(status, result);
+    } catch (error) {
+      if (!response.headersSent) {
+        respond(500, { ok: false, reason: "server_error", detail: error.message });
+      } else {
+        response.end();
+      }
+    }
   };
 }

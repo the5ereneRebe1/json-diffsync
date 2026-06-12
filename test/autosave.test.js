@@ -266,7 +266,7 @@ test("strict patch apply rejects stale oldValue while non-strict apply accepts i
   const after = {
     title: "Changed"
   };
-  const patch = createJsonPatch(before, after);
+  const patch = createJsonPatch(before, after, { includeOldValues: true });
   const diverged = {
     title: "Someone else changed this first"
   };
@@ -276,6 +276,120 @@ test("strict patch apply rejects stale oldValue while non-strict apply accepts i
     /oldValue does not match/
   );
   assert.deepEqual(applyJsonPatch(diverged, patch), after);
+});
+
+test("patches omit oldValue unless includeOldValues is set", () => {
+  const before = { title: "Original", blocks: [{ key: "a", text: "A" }], tags: ["one"] };
+  const after = { blocks: [], tags: ["two"] };
+
+  const lean = createJsonPatch(before, after);
+  assert.equal(lean.ops.length > 0, true);
+  assert.equal(lean.ops.every((op) => !("oldValue" in op)), true);
+  assert.deepEqual(applyJsonPatch(before, lean), after);
+
+  const verbose = createJsonPatch(before, after, { includeOldValues: true });
+  assert.equal(verbose.ops.some((op) => "oldValue" in op), true);
+});
+
+test("client tracks local changes for dirty-aware autosave", async () => {
+  const server = createMemoryAutosaveServer();
+  server.createDocument({ documentId: "doc-dirty", value: lexicalDoc() });
+  const opened = server.openDocument({ documentId: "doc-dirty", sessionId: "laptop" });
+  const laptop = createAutosaveClient({
+    documentId: "doc-dirty",
+    sessionId: "laptop",
+    initialValue: opened.value,
+    transport: server
+  });
+
+  assert.equal(laptop.hasLocalChanges(), false);
+  laptop.setValue(lexicalDoc([paragraph("p1", "Unsaved")]));
+  assert.equal(laptop.hasLocalChanges(), true);
+  await laptop.sync();
+  assert.equal(laptop.hasLocalChanges(), false);
+});
+
+test("persisted client recovers after a server restart resets session versions", async () => {
+  const backingStore = new Map();
+  const storage = {
+    getItem(key) {
+      return backingStore.get(key) ?? null;
+    },
+    setItem(key, value) {
+      backingStore.set(key, value);
+    },
+    removeItem(key) {
+      backingStore.delete(key);
+    }
+  };
+  const persister = createLocalStoragePersister("restart-state", storage);
+
+  const firstServer = createMemoryAutosaveServer();
+  firstServer.createDocument({ documentId: "doc-restart", value: lexicalDoc() });
+  const opened = firstServer.openDocument({ documentId: "doc-restart", sessionId: "laptop" });
+  const firstClient = createAutosaveClient({
+    documentId: "doc-restart",
+    sessionId: "laptop",
+    initialValue: opened.value,
+    transport: firstServer,
+    persister
+  });
+  firstClient.setValue(lexicalDoc([paragraph("p1", "Saved before restart")]));
+  await firstClient.sync();
+
+  // Restart: a fresh server loads the same canonical value but has no sessions,
+  // so the lazily created session starts at clientVersion 0 while the persisted
+  // client still carries clientVersion 1.
+  const secondServer = createMemoryAutosaveServer();
+  secondServer.createDocument({
+    documentId: "doc-restart",
+    value: firstServer.inspectDocument("doc-restart").value
+  });
+  const restoredClient = createAutosaveClient({
+    documentId: "doc-restart",
+    sessionId: "laptop",
+    initialValue: lexicalDoc(),
+    transport: secondServer,
+    persister
+  });
+  restoredClient.setValue(lexicalDoc([
+    paragraph("p1", "Saved before restart"),
+    paragraph("p2", "Written after restart")
+  ]));
+
+  await assert.rejects(() => restoredClient.sync(), /client_version_mismatch/);
+  await restoredClient.sync();
+
+  assert.deepEqual(
+    secondServer.inspectDocument("doc-restart").value.root.children.map((node) => node.key).sort(),
+    ["p1", "p2"]
+  );
+});
+
+test("corrupted persisted state falls back to the initial value", () => {
+  const backingStore = new Map([["broken-state", "{definitely not json"]]);
+  const storage = {
+    getItem(key) {
+      return backingStore.get(key) ?? null;
+    },
+    setItem(key, value) {
+      backingStore.set(key, value);
+    },
+    removeItem(key) {
+      backingStore.delete(key);
+    }
+  };
+  const persister = createLocalStoragePersister("broken-state", storage);
+
+  const client = createAutosaveClient({
+    documentId: "doc-broken",
+    sessionId: "laptop",
+    initialValue: lexicalDoc([paragraph("p1", "Fresh start")]),
+    transport: { sync: async () => ({ ok: false }) },
+    persister
+  });
+
+  assert.deepEqual(client.getValue(), lexicalDoc([paragraph("p1", "Fresh start")]));
 });
 
 test("server keepRevisions can be disabled", async () => {

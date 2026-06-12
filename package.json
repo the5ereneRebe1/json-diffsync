@@ -1,6 +1,6 @@
 {
   "name": "json-diffsync",
-  "version": "0.0.1",
+  "version": "0.2.0",
   "description": "Differential synchronization primitives for JSON autosave, React clients, and Node servers.",
   "type": "module",
   "license": "MIT",
@@ -23,6 +23,7 @@
   },
   "files": [
     "src",
+    "assets",
     "README.md",
     "LICENSE"
   ],

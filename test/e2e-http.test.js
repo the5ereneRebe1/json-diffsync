@@ -32,8 +32,8 @@ function paragraph(key, text) {
   };
 }
 
-async function startHttpSyncServer(syncServer) {
-  const handler = createNodeSyncHandler(syncServer);
+async function startHttpSyncServer(syncServer, handlerOptions) {
+  const handler = createNodeSyncHandler(syncServer, handlerOptions);
   const app = http.createServer((request, response) => {
     if (request.url === "/sync") return handler(request, response);
     response.writeHead(404);
@@ -97,6 +97,97 @@ test("e2e: two JSON clients sync through the HTTP transport", async () => {
 
     assert.deepEqual(serverKeys, ["ipad-p1", "laptop-p1"]);
     assert.deepEqual(laptopKeys, ["ipad-p1", "laptop-p1"]);
+  } finally {
+    await httpServer.close();
+  }
+});
+
+test("e2e: a fresh client syncs over HTTP without a manual openDocument call", async () => {
+  const syncServer = createMemoryAutosaveServer({ keyFields: ["key", "id"] });
+  syncServer.createDocument({ documentId: "doc-1", value: lexicalDoc() });
+  const httpServer = await startHttpSyncServer(syncServer);
+
+  try {
+    // Mirrors the README Quick Start: no openDocument anywhere, just create a
+    // client against the HTTP transport and sync. This is the only path a real
+    // remote consumer has, since openDocument is not reachable over HTTP.
+    const client = createAutosaveClient({
+      documentId: "doc-1",
+      sessionId: "laptop",
+      initialValue: lexicalDoc(),
+      transport: createFetchTransport(httpServer.url)
+    });
+
+    client.setValue(lexicalDoc([paragraph("p1", "Hello from the laptop")]));
+    const result = await client.sync();
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(
+      syncServer
+        .inspectDocument("doc-1")
+        .value.root.children.map((node) => node.key),
+      ["p1"]
+    );
+  } finally {
+    await httpServer.close();
+  }
+});
+
+test("e2e: handler survives malformed bodies, unknown documents, and oversized payloads", async () => {
+  const syncServer = createMemoryAutosaveServer();
+  syncServer.createDocument({ documentId: "doc-robust", value: lexicalDoc() });
+  const httpServer = await startHttpSyncServer(syncServer, { maxBodyBytes: 2048 });
+
+  try {
+    const badJson = await fetch(httpServer.url, { method: "POST", body: "{not json" });
+    assert.equal(badJson.status, 400);
+    assert.equal((await badJson.json()).reason, "invalid_json");
+
+    const badShape = await fetch(httpServer.url, {
+      method: "POST",
+      body: JSON.stringify({ hello: "world" })
+    });
+    assert.equal(badShape.status, 400);
+    assert.equal((await badShape.json()).reason, "invalid_message");
+
+    const unknownDoc = await fetch(httpServer.url, {
+      method: "POST",
+      body: JSON.stringify({
+        documentId: "nope",
+        sessionId: "laptop",
+        clientVersion: 0,
+        shadowHash: "x",
+        patch: { kind: "json-keyed", baseHash: "x", ops: [] }
+      })
+    });
+    assert.equal(unknownDoc.status, 404);
+    assert.equal((await unknownDoc.json()).reason, "unknown_document");
+
+    // Oversized bodies are either answered with 413 or the connection is cut;
+    // either way the server must not crash.
+    const oversized = await fetch(httpServer.url, {
+      method: "POST",
+      body: JSON.stringify({
+        documentId: "doc-robust",
+        sessionId: "laptop",
+        clientVersion: 0,
+        shadowHash: "x",
+        patch: { kind: "json-keyed", baseHash: "x", ops: [] },
+        padding: "x".repeat(64 * 1024)
+      })
+    }).catch(() => null);
+    if (oversized) assert.equal(oversized.status, 413);
+
+    // The server is still alive and fully functional afterwards.
+    const client = createAutosaveClient({
+      documentId: "doc-robust",
+      sessionId: "laptop",
+      initialValue: lexicalDoc(),
+      transport: createFetchTransport(httpServer.url)
+    });
+    client.setValue(lexicalDoc([paragraph("p1", "Still alive")]));
+    const result = await client.sync();
+    assert.equal(result.ok, true);
   } finally {
     await httpServer.close();
   }
