@@ -69,7 +69,7 @@
     "@lexical/react": "^0.45.0",
     "@playwright/test": "^1.60.0",
     "@vitejs/plugin-react": "^6.0.2",
-    "lexical": "^0.45.0",
+    "lexical": "^0.46.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "vite": "^8.0.16"
